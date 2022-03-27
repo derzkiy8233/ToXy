@@ -70,4 +70,125 @@ class UpdaterMod(loader.Module):
                 await client.disconnect()
         await message.client.disconnect()
 
-    
+    @loader.owner
+    async def downloadcmd(self, message: Message) -> None:
+        """Downloads userbot updates"""
+        message = await utils.answer(message, self.strings("downloading", message))
+        await self.download_common()
+        await utils.answer(message, self.strings("downloaded", message))
+
+    async def download_common(self):
+        try:
+            repo = Repo(os.path.dirname(utils.get_base_dir()))
+            origin = repo.remote("origin")
+            r = origin.pull()
+            new_commit = repo.head.commit
+            for info in r:
+                if info.old_commit:
+                    for d in new_commit.diff(info.old_commit):
+                        if d.b_path == "requirements.txt":
+                            return True
+            return False
+        except git.exc.InvalidGitRepositoryError:
+            repo = Repo.init(os.path.dirname(utils.get_base_dir()))
+            origin = repo.create_remote("origin", self.config["GIT_ORIGIN_URL"])
+            origin.fetch()
+            repo.create_head("master", origin.refs.master)
+            repo.heads.master.set_tracking_branch(origin.refs.master)
+            repo.heads.master.checkout(True)
+            return False
+
+    @staticmethod
+    def req_common() -> None:
+        # Now we have downloaded new code, install requirements
+        logger.debug("Installing new requirements...")
+        try:
+            subprocess.run(  # skipcq: PYL-W1510
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "-r",
+                    os.path.join(
+                        os.path.dirname(utils.get_base_dir()), "requirements.txt"
+                    ),
+                    "--user",
+                ]
+            )
+
+        except subprocess.CalledProcessError:
+            logger.exception("Req install failed")
+
+    @loader.owner
+    async def updatecmd(self, message: Message, hard: bool = False) -> None:
+        """Downloads userbot updates"""
+        # We don't really care about asyncio at this point, as we are shutting down
+        if hard:
+            os.system(f"cd {utils.get_base_dir()} && cd .. && git reset --hard HEAD")  # skipcq: BAN-B605
+
+        try:
+            try:
+                msgs = await utils.answer(message, self.strings("downloading", message))
+            except telethon.errors.rpcerrorlist.MessageNotModifiedError:
+                pass
+
+            req_update = await self.download_common()
+
+            try:
+                message = (
+                    await utils.answer(msgs, self.strings("installing", message))
+                )[0]
+            except telethon.errors.rpcerrorlist.MessageNotModifiedError:
+                pass
+
+            if req_update:
+                self.req_common()
+            await self.restart_common(message)
+        except GitCommandError:
+            await self.updatecmd(message, True)
+
+    @loader.unrestricted
+    async def sourcecmd(self, message: Message) -> None:
+        """Links the source code of this project"""
+        await utils.answer(
+            message,
+            self.strings("source", message).format(self.config["GIT_ORIGIN_URL"]),
+        )
+
+    async def client_ready(self, client, db):
+        self._db = db
+        self._me = await client.get_me()
+        self._client = client
+
+        if (
+            db.get(__name__, "selfupdatechat") is not None
+            and db.get(__name__, "selfupdatemsg") is not None
+        ):
+            try:
+                await self.update_complete(client)
+            except Exception:
+                logger.exception("Failed to complete update!")
+
+        self._db.set(__name__, "selfupdatechat", None)
+        self._db.set(__name__, "selfupdatemsg", None)
+
+    async def update_complete(self, client):
+        logger.debug("Self update successful! Edit message")
+        msg = self.strings("success")
+
+        await client.edit_message(
+            self._db.get(__name__, "selfupdatechat"),
+            self._db.get(__name__, "selfupdatemsg"),
+            msg,
+        )
+
+
+def restart(*argv):
+    os.execl(
+        sys.executable,
+        sys.executable,
+        "-m",
+        os.path.relpath(utils.get_base_dir()),
+        *argv,
+    )
