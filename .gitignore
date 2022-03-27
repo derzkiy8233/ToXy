@@ -131,9 +131,9 @@ dmypy.json
 
 *__pycache__
 *.pyc
-hikka/api_token.py
-hikka/loaded_modules
-hikka*.session*
+toxy/api_token.py
+toxy/loaded_modules
+toxy*.session*
 database-*.json
 *.swp
 .setup_complete
